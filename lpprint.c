@@ -58,10 +58,10 @@ void printinst (const Instruction *op, const Instruction *p) {
     "testany", "testchar", "testset",
     "span", "behind",
     "ret", "end",
-    "choice", "jmp", "call", "open_call",
+    "choice", "pred_choice", "jmp", "call", "open_call", /* labeled failure */
     "commit", "partial_commit", "back_commit", "failtwice", "fail", "giveup",
      "fullcapture", "opencapture", "closecapture", "closeruntime",
-    "throw", "recovery", "labeled_choice"  /* labeled failure */
+    "throw", "throw_rec",  /* labeled failure */
   };
   printf("%02ld: %s ", (long)(p - op), names[p->i.code]);
   switch ((Opcode)p->i.code) {
@@ -103,17 +103,17 @@ void printinst (const Instruction *op, const Instruction *p) {
       break;
     }
     case IJmp: case ICall: case ICommit: case IChoice:
-    case IPartialCommit: case IBackCommit: case ITestAny: {
+    case IPartialCommit: case IBackCommit: case ITestAny:
+    case IPredChoice: { /* labeled failure */
       printjmp(op, p);
       break;
     }
     case IThrow: { /* labeled failure */
-      printf("%d", p->i.aux);
+      printf("(idx = %d)", (p + 1)->i.key);
       break;
     }
-	  case IRecov: case ILabChoice: { /* labeled failure */
-      printjmp(op, p);
-      printcharset((p+2)->buff);
+    case IThrowRec: { /* labeled failure */
+      printjmp(op, p); printf(" (idx = %d)", (p + 2)->i.key);
       break;
     }
     default: break;
@@ -164,7 +164,7 @@ static const char *tagnames[] = {
   "call", "opencall", "rule", "grammar",
   "behind",
   "capture", "run-time",
-  "throw", "recov", "labeled-choice"  /* labeled failure */
+  "throw"  /* labeled failure */
 };
 
 
@@ -217,16 +217,14 @@ void printtree (TTree *tree, int ident) {
       break;
     }
     case TThrow: { /* labeled failure */
-      printf(" labels: %d\n", tree->u.label);
+      if (tree->u.ps != 0) 
+        assert(sib2(tree)->tag == TRule);
+      printf(" key: %d  (rule: %d)\n", tree->key, sib2(tree)->cap);
       break;
     }
     default: {
       int sibs = numsiblings[tree->tag];
       printf("\n");
-      if (tree->tag == TRecov || tree->tag == TLabChoice) { /* labeled failure */
-      	printcharset(treelabelset(tree));
-      	printf("\n");
-			}
       if (sibs >= 1) {
         printtree(sib1(tree), ident + 2);
         if (sibs >= 2)

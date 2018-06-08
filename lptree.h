@@ -35,11 +35,7 @@ typedef enum TTag {
                 'sib1' is capture body */
   TRunTime,  /* run-time capture: 'key' is Lua function;
                'sib1' is capture body */
-  TThrow,    /* labeled failure: 'label' = l */
-  TRecov,    /* labed failure: 'sib1' //{labels} 'sib2' */
-             /* the set of labels is stored in next CHARSETSIZE bytes */
-  TLabChoice /* labed failure: 'sib1' /{labels} 'sib2' */
-             /* the set of labels is stored in next CHARSETSIZE bytes */
+  TThrow,    /* labeled failure: ktable[key] is label's name */
 } TTag;
 
 
@@ -55,11 +51,7 @@ typedef struct TTree {
   unsigned short key;  /* key in ktable for Lua data (0 if no key) */
   union {
     int n;  /* occasional counter */
-		int label; /* labeled failure */
-		struct {   /* labeled failure */
-    	int ps;  /* occasional second child */
-			int plab; /* occasional label set */
-		} s; /* labeled failure */
+    int ps;  /* occasional second child */
   } u;
 } TTree;
 
@@ -80,7 +72,7 @@ extern const byte numsiblings[];
 
 /* access to children */
 #define sib1(t)         ((t) + 1)
-#define sib2(t)         ((t) + (t)->u.s.ps)
+#define sib2(t)         ((t) + (t)->u.ps)
 
 
 

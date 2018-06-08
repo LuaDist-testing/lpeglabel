@@ -28,7 +28,7 @@ const byte numsiblings[] = {
   0, 0, 2, 1,  /* call, opencall, rule, grammar */
   1,  /* behind */
   1, 1,  /* capture, runtime capture */
-  0, 2, 2  /* labeled failure throw, recovery, labeled choice */
+  0  /* labeled failure throw */
 };
 
 
@@ -52,20 +52,24 @@ static const char *val2str (lua_State *L, int idx) {
 ** translate a key to its rule address in the tree. Raises an
 ** error if key does not exist.
 */
-static void fixonecall (lua_State *L, int postable, TTree *g, TTree *t) {
+static void fixonecall (lua_State *L, int postable, TTree *g, TTree *t, byte tag) { /* labeled failure */
   int n;
   lua_rawgeti(L, -1, t->key);  /* get rule's name */
   lua_gettable(L, postable);  /* query name in position table */
   n = lua_tonumber(L, -1);  /* get (absolute) position */
   lua_pop(L, 1);  /* remove position */
-  if (n == 0) {  /* no position? */
-    lua_rawgeti(L, -1, t->key);  /* get rule's name again */
-    luaL_error(L, "rule '%s' undefined in given grammar", val2str(L, -1));
+  if (tag == TOpenCall) {
+    if (n == 0) {  /* no position? */
+      lua_rawgeti(L, -1, t->key);  /* get rule's name again */
+      luaL_error(L, "rule '%s' undefined in given grammar", val2str(L, -1));
+    }
+    t->tag = TCall;
+    t->u.ps = n - (t - g);  /* position relative to node */
+    assert(sib2(t)->tag == TRule);
+    sib2(t)->key = t->key;  /* fix rule's key */
+  } else if (n != 0) { /* labeled failure */
+  	t->u.ps = n - (t - g);  /* position relative to node */
   }
-  t->tag = TCall;
-  t->u.s.ps = n - (t - g);  /* position relative to node */
-  assert(sib2(t)->tag == TRule);
-  sib2(t)->key = t->key;  /* fix rule's key */
 }
 
 
@@ -80,13 +84,13 @@ static void correctassociativity (TTree *tree) {
   TTree *t1 = sib1(tree);
   assert(tree->tag == TChoice || tree->tag == TSeq);
   while (t1->tag == tree->tag) {
-    int n1size = tree->u.s.ps - 1;  /* t1 == Op t11 t12 */
-    int n11size = t1->u.s.ps - 1;
+    int n1size = tree->u.ps - 1;  /* t1 == Op t11 t12 */
+    int n11size = t1->u.ps - 1;
     int n12size = n1size - n11size - 1;
     memmove(sib1(tree), sib1(t1), n11size * sizeof(TTree)); /* move t11 */
-    tree->u.s.ps = n11size + 1;
+    tree->u.ps = n11size + 1;
     sib2(tree)->tag = tree->tag;
-    sib2(tree)->u.s.ps = n12size + 1;
+    sib2(tree)->u.ps = n12size + 1;
   }
 }
 
@@ -105,11 +109,16 @@ static void finalfix (lua_State *L, int postable, TTree *g, TTree *t) {
       return;
     case TOpenCall: {
       if (g != NULL)  /* inside a grammar? */
-        fixonecall(L, postable, g, t);
+        fixonecall(L, postable, g, t, TOpenCall);
       else {  /* open call outside grammar */
         lua_rawgeti(L, -1, t->key);
         luaL_error(L, "rule '%s' used outside a grammar", val2str(L, -1));
       }
+      break;
+    }
+    case TThrow: { /* labeled failure */
+      if (g != NULL)  /* inside a grammar? */
+        fixonecall(L, postable, g, t, TThrow);
       break;
     }
     case TSeq: case TChoice:
@@ -216,7 +225,7 @@ static void correctkeys (TTree *tree, int n) {
   if (n == 0) return;  /* no correction? */
  tailcall:
   switch (tree->tag) {
-    case TOpenCall: case TCall: case TRunTime: case TRule: {
+    case TOpenCall: case TCall: case TRunTime: case TRule: case TThrow: { /* labeled failure */
       if (tree->key > 0)
         tree->key += n;
       break;
@@ -388,7 +397,7 @@ static TTree *newcharset (lua_State *L) {
 ** 'sibsize'); returns position for second sibling
 */
 static TTree *seqaux (TTree *tree, TTree *sib, int sibsize) {
-  tree->tag = TSeq; tree->u.s.ps = sibsize + 1;
+  tree->tag = TSeq; tree->u.ps = sibsize + 1;
   memcpy(sib1(tree), sib, sibsize * sizeof(TTree));
   return sib2(tree);
 }
@@ -402,7 +411,7 @@ static TTree *seqaux (TTree *tree, TTree *sib, int sibsize) {
 static void fillseq (TTree *tree, int tag, int n, const char *s) {
   int i;
   for (i = 0; i < n - 1; i++) {  /* initial n-1 copies of Seq tag; Seq ... */
-    tree->tag = TSeq; tree->u.s.ps = 2;
+    tree->tag = TSeq; tree->u.ps = 2;
     sib1(tree)->tag = tag;
     sib1(tree)->u.n = s ? (byte)s[i] : 0;
     tree = sib2(tree);
@@ -509,7 +518,7 @@ static TTree *newroot2sib (lua_State *L, int tag) {
   TTree *tree2 = getpatt(L, 2, &s2);
   TTree *tree = newtree(L, 1 + s1 + s2);  /* create new tree */
   tree->tag = tag;
-  tree->u.s.ps =  1 + s1;
+  tree->u.ps =  1 + s1;
   memcpy(sib1(tree), tree1, s1 * sizeof(TTree));
   memcpy(sib2(tree), tree2, s2 * sizeof(TTree));
   joinktables(L, 1, sib2(tree), 2);
@@ -518,25 +527,10 @@ static TTree *newroot2sib (lua_State *L, int tag) {
 
 
 /* labeled failure begin */
-static TTree *newthrowleaf (lua_State *L, int lab) {
+static TTree *newthrowleaf (lua_State *L) {
   TTree *tree = newtree(L, 1);
   tree->tag = TThrow;
-	tree->u.label = lab;
-  return tree;
-}
-
-static TTree *newrootlab2sib (lua_State *L, int tag) {
-  int s1, s2;
-  TTree *tree1 = getpatt(L, 1, &s1);
-  TTree *tree2 = getpatt(L, 2, &s2);
-  TTree *tree = newtree(L, bytes2slots(LABELSETSIZE) + 1 + s1 + s2);  /* create new tree */
-  tree->tag = tag;
-  tree->u.s.ps =  1 + s1;
-	tree->u.s.plab = 1 + s1 + s2;
-	memcpy(sib1(tree), tree1, s1 * sizeof(TTree));
-  memcpy(sib2(tree), tree2, s2 * sizeof(TTree));
-  loopset(i, treelabelset(tree)[i] = 0);
-	joinktables(L, 1, sib2(tree), 2);
+	tree->u.ps = 0; /* there is no recovery rule associated */
   return tree;
 }
 /* labeled failure end */
@@ -614,12 +608,12 @@ static int lp_star (lua_State *L) {
     /* size = (choice + seq + tree1 + true) * n, but the last has no seq */
     tree = newtree(L, n * (size1 + 3) - 1);
     for (; n > 1; n--) {  /* repeat (n - 1) times */
-      tree->tag = TChoice; tree->u.s.ps = n * (size1 + 3) - 2;
+      tree->tag = TChoice; tree->u.ps = n * (size1 + 3) - 2;
       sib2(tree)->tag = TTrue;
       tree = sib1(tree);
       tree = seqaux(tree, tree1, size1);
     }
-    tree->tag = TChoice; tree->u.s.ps = size1 + 1;
+    tree->tag = TChoice; tree->u.ps = size1 + 1;
     sib2(tree)->tag = TTrue;
     memcpy(sib1(tree), tree1, size1 * sizeof(TTree));
   }
@@ -662,7 +656,7 @@ static int lp_sub (lua_State *L) {
   else {
     TTree *tree = newtree(L, 2 + s1 + s2);
     tree->tag = TSeq;  /* sequence of... */
-    tree->u.s.ps =  2 + s2;
+    tree->u.ps =  2 + s2;
     sib1(tree)->tag = TNot;  /* ...not... */
     memcpy(sib1(sib1(tree)), t2, s2 * sizeof(TTree));  /* ...t2 */
     memcpy(sib2(tree), t1, s1 * sizeof(TTree));  /* ... and t1 */
@@ -721,43 +715,11 @@ static int lp_behind (lua_State *L) {
 ** Throws a label 
 */
 static int lp_throw (lua_State *L) {
-	int label = luaL_checkinteger(L, -1);
-	luaL_argcheck(L, label >= 1 && label < MAXLABELS, -1, "the number of a label must be between 1 and 255");
-	newthrowleaf(L, label);
+	TTree * tree;
+  luaL_checkstring(L, -1); 
+  tree = newthrowleaf(L);
+  tree->key = addtonewktable(L, 0, 1);
 	return 1;
-}
-
-
-/*
-** labeled recovery function
-*/
-static int lp_recovery (lua_State *L) {
-	int n = lua_gettop(L);
-	TTree *tree = newrootlab2sib(L, TRecov);
-  int i;
-  luaL_argcheck(L, n >= 3, 3, "non-nil value expected");
-  for (i = 3; i <= n; i++) {
-    int d = luaL_checkinteger(L, i);
-    luaL_argcheck(L, d >= 1 && d < MAXLABELS, i, "the number of a label must be between 1 and 255");
-    setlabel(treelabelset(tree), (byte)d);
-	}
-  return 1;
-}
-
-
-/*
-** labeled choice function
-*/
-static int lp_labchoice (lua_State *L) {
-	int n = lua_gettop(L);
-	TTree *tree = newrootlab2sib(L, TLabChoice);
-	int i;
-	for (i = 3; i <= n; i++) {
-		int d = luaL_checkinteger(L, i);
-		luaL_argcheck(L, d >= 1 && d < MAXLABELS, i, "the number of a label must be between 1 and 255");
-    setlabel(treelabelset(tree), (byte)d);
-	}
-  return 1;
 }
 /* labeled failure end */
 
@@ -907,7 +869,7 @@ static int lp_constcapture (lua_State *L) {
     tree = sib1(tree);
     for (i = 1; i <= n - 1; i++) {
       tree->tag = TSeq;
-      tree->u.s.ps = 3;  /* skip TCapture and its sibling */
+      tree->u.ps = 3;  /* skip TCapture and its sibling */
       auxemptycap(sib1(tree), Cconst);
       sib1(tree)->key = addtoktable(L, i);
       tree = sib2(tree);
@@ -1009,7 +971,7 @@ static void buildgrammar (lua_State *L, TTree *grammar, int frule, int n) {
     nd->tag = TRule;
     nd->key = 0;  /* will be fixed when rule is used */
     nd->cap = i;  /* rule number */
-    nd->u.s.ps = rulesize + 1;  /* point to next rule */
+    nd->u.ps = rulesize + 1;  /* point to next rule */
     memcpy(sib1(nd), rn, rulesize * sizeof(TTree));  /* copy rule */
     mergektable(L, ridx, sib1(nd));  /* merge its ktable into new one */
     nd = sib2(nd);  /* move to next rule */
@@ -1095,7 +1057,7 @@ static int verifyrule (lua_State *L, TTree *tree, int *passed, int npassed,
         return nb;
       /* else return verifyrule(L, sib2(tree), passed, npassed, nb); */
       tree = sib2(tree); goto tailcall;
-    case TChoice: case TRecov: case TLabChoice: /* must check both children */  /* labeled failure */
+    case TChoice: /* must check both children */
       nb = verifyrule(L, sib1(tree), passed, npassed, nb);
       /* return verifyrule(L, sib2(tree), passed, npassed, nb); */
       tree = sib2(tree); goto tailcall;
@@ -1234,7 +1196,7 @@ static int lp_match (lua_State *L) {
   const char *s = luaL_checklstring(L, SUBJIDX, &l);
   size_t i = initposition(L, l);
   int ptop = lua_gettop(L);
-  byte labelf; /* labeled failure */
+  short labelf; /* labeled failure */
   const char *sfail = NULL; /* labeled failure */
   lua_pushnil(L);  /* initialize subscache */
   lua_pushlightuserdata(L, capture);  /* initialize caplistidx */
@@ -1242,8 +1204,18 @@ static int lp_match (lua_State *L) {
   r = match(L, s, s + i, s + l, code, capture, ptop, &labelf, &sfail); /* labeled failure */
   if (r == NULL) { /* labeled failure begin */
     lua_pushnil(L);
-		lua_pushinteger(L, labelf);	
-		lua_pushstring(L, sfail); /* Pushing the subject where the failure occurred */
+    if (labelf) {
+      lua_Integer luaInt;
+      lua_rawgeti(L, ktableidx(ptop), labelf);
+      luaInt = lua_tointeger(L, -1);
+      if (luaInt) {
+        lua_pop(L, 1);
+        lua_pushinteger(L, luaInt);
+      }
+    }
+    else 
+		  lua_pushstring(L, "fail");
+		lua_pushinteger(L, sfail - (s + i) + 1); /* subject position related to the error */
     return 3;
   }  /* labeled failure end */
   return getcaptures(L, s, r, ptop);
@@ -1348,8 +1320,6 @@ static struct luaL_Reg pattreg[] = {
   {"setmaxstack", lp_setmax},
   {"type", lp_type},
   {"T", lp_throw}, /* labeled failure throw */
-  {"Rec", lp_recovery}, /* labeled failure recovery */
-  {"Lc", lp_labchoice}, /* labeled failure choice */
   {NULL, NULL}
 };
 

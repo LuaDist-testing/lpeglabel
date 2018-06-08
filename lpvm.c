@@ -18,20 +18,13 @@
 
 /* initial size for call/backtrack stack */
 #if !defined(INITBACK)
-#define INITBACK	MAXBACK
+#define INITBACK  MAXBACK
 #endif
 
 
-#define getoffset(p)	(((p) + 1)->offset)
+#define getoffset(p)  (((p) + 1)->offset)
 
 static const Instruction giveup = {{IGiveup, 0, 0}};
-
-/* labeled failure */
-static void setlabelfail(Labelset *ls) { 
-	loopset(i, ls->cs[i] = 0); 
-  ls->cs[IDXLFAIL] = 1;
-}
-/* labeled failure end */
 
 
 /*
@@ -44,12 +37,13 @@ static void setlabelfail(Labelset *ls) {
 typedef struct Stack {
   const char *s;  /* saved position (or NULL for calls) */
   const Instruction *p;  /* next instruction */
-  const Labelset *ls; /* labeled failure */
   int caplevel;
+  byte labenv; /* labeled failure */
+  byte predchoice; /* labeled failure */
 } Stack;
 
 
-#define getstackbase(L, ptop)	((Stack *)lua_touserdata(L, stackidx(ptop)))
+#define getstackbase(L, ptop)  ((Stack *)lua_touserdata(L, stackidx(ptop)))
 
 
 /*
@@ -155,7 +149,7 @@ static int removedyncap (lua_State *L, Capture *capture,
 ** Opcode interpreter
 */
 const char *match (lua_State *L, const char *o, const char *s, const char *e,
-                   Instruction *op, Capture *capture, int ptop, byte *labelf, const char **sfail) { /* labeled failure */
+                   Instruction *op, Capture *capture, int ptop, short *labelf, const char **sfail) { /* labeled failure */
   Stack stackbase[INITBACK];
   Stack *stacklimit = stackbase + INITBACK;
   Stack *stack = stackbase;  /* point to first empty slot in stack */
@@ -163,11 +157,9 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
   int captop = 0;  /* point to first empty slot in captures */
   int ndyncap = 0;  /* number of dynamic captures (in Lua stack) */
   const Instruction *p = op;  /* current instruction */
-  const Instruction *pk = NULL;  /* resume instruction */
-	Labelset lsfail;
-	setlabelfail(&lsfail);
-  stack->p = &giveup; stack->s = s; stack->ls = &lsfail; stack->caplevel = 0; stack++;  /* labeled failure */
-	*sfail = s; /* labeled failure */
+  byte insidepred = OUTPRED; /* labeled failure: label environment is off inside predicates */
+  stack->p = &giveup; stack->s = s; stack->caplevel = 0; stack->labenv = insidepred; stack++;  /* labeled failure */
+  *sfail = s; /* labeled failure */
   lua_pushlightuserdata(L, stackbase);
   for (;;) {
 #if defined(DEBUG)
@@ -178,6 +170,7 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
       printinst(op, p);
 #endif
     assert(stackidx(ptop) + ndyncap == lua_gettop(L) && ndyncap <= captop);
+    assert(insidepred == INPRED || insidepred == OUTPRED);
     switch ((Opcode)p->i.code) {
       case IEnd: {
         assert(stack == getstackbase(L, ptop) + 1);
@@ -198,8 +191,7 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
         if (s < e) { p++; s++; }
         else {
           *labelf = LFAIL; /* labeled failure */
-          pk = p + 1;
-					updatefarthest(*sfail, s); /*labeled failure */
+          updatefarthest(*sfail, s); /*labeled failure */
           goto fail;
         }
         continue;
@@ -213,8 +205,7 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
         if ((byte)*s == p->i.aux && s < e) { p++; s++; }
         else {
           *labelf = LFAIL; /* labeled failure */
-          pk = p + 1;
-					updatefarthest(*sfail, s); /*labeled failure */
+          updatefarthest(*sfail, s); /*labeled failure */
           goto fail;
         }
         continue;
@@ -230,8 +221,7 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
           { p += CHARSETINSTSIZE; s++; }
         else {
           *labelf = LFAIL; /* labeled failure */
-          pk = p + CHARSETINSTSIZE;
-					updatefarthest(*sfail, s); /*labeled failure */
+          updatefarthest(*sfail, s); /*labeled failure */
           goto fail;
         }
         continue;
@@ -247,8 +237,7 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
         int n = p->i.aux;
         if (n > s - o) {
           *labelf = LFAIL; /* labeled failure */
-					pk = p + 1;
-					updatefarthest(*sfail, s); /*labeled failure */
+          updatefarthest(*sfail, s); /*labeled failure */
           goto fail;
         }
         s -= n; p++;
@@ -271,32 +260,24 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
           stack = doublestack(L, &stacklimit, ptop);
         stack->p = p + getoffset(p);
         stack->s = s;
-        stack->ls = &lsfail; /* labeled failure */
         stack->caplevel = captop;
+        stack->labenv = insidepred; /* labeled failure */
+        stack->predchoice = 0; /* labeled failure */
         stack++;
         p += 2;
         continue;
-      }
-      case ILabChoice: { /* labeled failure */
+      } 
+      case IPredChoice: { /* labeled failure: new instruction */
         if (stack == stacklimit)
           stack = doublestack(L, &stacklimit, ptop);
         stack->p = p + getoffset(p);
         stack->s = s;
-        stack->ls = (const Labelset *) ((p + 2)->buff);
         stack->caplevel = captop;
+        stack->labenv = insidepred;
+        stack->predchoice = 1; 
         stack++;
-        p += (CHARSETINSTSIZE - 1) + 2;
-        continue;
-      }
-      case IRecov: { /* labeled failure */
-        if (stack == stacklimit)
-          stack = doublestack(L, &stacklimit, ptop);
-        stack->p = p + getoffset(p);
-        stack->s = NULL;
-        stack->ls = (const Labelset *) ((p + 2)->buff);
-        stack->caplevel = captop;
-        stack++;
-        p += (CHARSETINSTSIZE - 1) + 2;
+        insidepred = INPRED;
+        p += 2;
         continue;
       }
       case ICall: {
@@ -304,14 +285,13 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
           stack = doublestack(L, &stacklimit, ptop);
         stack->s = NULL;
         stack->p = p + 2;  /* save return address */
-        stack->ls = NULL;
         stack++;
         p += getoffset(p);
         continue;
       }
       case ICommit: {
-        assert(stack > getstackbase(L, ptop) && (stack - 1)->ls != NULL); /* labeled failure */
-        /*assert((stack - 1)->s != NULL); labeled failure: IRecov does not push s onto the stack */
+        assert(stack > getstackbase(L, ptop)); 
+        assert((stack - 1)->s != NULL);
         stack--;
         p += getoffset(p);
         continue;
@@ -326,14 +306,45 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
       case IBackCommit: {
         assert(stack > getstackbase(L, ptop) && (stack - 1)->s != NULL);
         s = (--stack)->s;
+        insidepred = stack->labenv; /* labeled failure */
         captop = stack->caplevel;
         p += getoffset(p);
         continue;
       }
       case IThrow: { /* labeled failure */
-        *labelf = p->i.aux;
-        pk = p + 1;
-				*sfail = s;
+        if (insidepred == OUTPRED) {
+          *labelf = (p+1)->i.key;
+          stack = getstackbase(L, ptop);
+          stack++;
+        }
+        else {
+          while (!(stack-1)->predchoice) {
+            --stack;
+          } 
+          *labelf = LFAIL;
+        }
+        *sfail = s;
+        goto fail;
+      }
+      case IThrowRec: { /* labeled failure */
+        if (insidepred == OUTPRED) {
+          *labelf = (p+2)->i.key;
+          *sfail = s;
+          if (stack == stacklimit)
+            stack = doublestack(L, &stacklimit, ptop);
+          stack->s = NULL;
+          stack->p = p + 3;
+          stack->caplevel = captop;
+          stack++;
+          p += getoffset(p);
+          continue;
+        } else {
+          while (!(stack-1)->predchoice) {
+            --stack;
+          } 
+          *labelf = LFAIL;
+          *sfail = s;
+        }
         goto fail;
       }
       case IFailTwice:
@@ -342,31 +353,18 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
         /* go through */
       case IFail:
       *labelf = LFAIL; /* labeled failure */
-      pk = NULL;
-			updatefarthest(*sfail, s); /*labeled failure */
+      updatefarthest(*sfail, s); /*labeled failure */
       fail: { /* pattern failed: try to backtrack */
-        const Labelset *auxlab = NULL;
-				Stack *pstack = stack;
         do {  /* remove pending calls */
-          assert(pstack > getstackbase(L, ptop));
-          auxlab = (--pstack)->ls;
-        } while (auxlab == NULL || !(pstack->p == &giveup || testlabel(pstack->ls->cs, *labelf)));
-        if (pstack->s != NULL) { /* labeled failure: giveup or backtrack frame */
-					stack = pstack;
-					s = stack->s;
-        	if (ndyncap > 0)  /* is there matchtime captures? */
-        		ndyncap -= removedyncap(L, capture, stack->caplevel, captop);
-        	captop = stack->caplevel;
-				} else { /* labeled failure: recovery frame */
-					if (stack == stacklimit)
-          	stack = doublestack(L, &stacklimit, ptop);
-					stack->s = NULL;
-        	stack->p = pk;  /* save return address */
-        	stack->ls = NULL;
-        	stack->caplevel = captop; /* TODO: really necessary?? */
-					stack++;
-				}
-        p = pstack->p;
+          assert(stack > getstackbase(L, ptop));
+          s = (--stack)->s;
+        } while (s == NULL);
+        if (ndyncap > 0)  /* is there matchtime captures? */
+          ndyncap -= removedyncap(L, capture, stack->caplevel, captop);
+        captop = stack->caplevel;
+        assert((insidepred == INPRED && stack->labenv == OUTPRED) || insidepred == stack->labenv);
+        insidepred = stack->labenv; /* labeled failure */
+        p = stack->p;
 #if defined(DEBUG)
         printf("**FAIL**\n");
 #endif
@@ -383,9 +381,8 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
         fr -= rem;  /* 'rem' items were popped from Lua stack */
         res = resdyncaptures(L, fr, s - o, e - o);  /* get result */
         if (res == -1) { /* fail? */
-      		*labelf = LFAIL;  /* labeled failure */
-					pk = NULL;
-					updatefarthest(*sfail, s); /*labeled failure */
+          *labelf = LFAIL;  /* labeled failure */
+          updatefarthest(*sfail, s); /*labeled failure */
           goto fail;
         }
         s = o + res;  /* else update current position */

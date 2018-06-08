@@ -1,10 +1,10 @@
 -- $Id: re.lua,v 1.44 2013/03/26 20:11:40 roberto Exp $
 
 -- imported functions and modules
-local tonumber, type, print, error, ipairs = tonumber, type, print, error, ipairs
+local tonumber, type, print, error = tonumber, type, print, error
 local pcall = pcall
 local setmetatable = setmetatable
-local unpack, tinsert, concat = table.unpack or unpack, table.insert, table.concat
+local tinsert, concat = table.insert, table.concat
 local rep = string.rep
 local m = require"lpeglabel"
 
@@ -28,69 +28,58 @@ local dummy = mm.P(false)
 
 
 local errinfo = {
-  {"NoPatt", "no pattern found"},
-  {"ExtraChars", "unexpected characters after the pattern"},
+  NoPatt = "no pattern found",
+  ExtraChars = "unexpected characters after the pattern",
 
-  {"ExpPatt1", "expected a pattern after '/' and '//{...}', or the label(s) after '/{' and '//{'"},
+  ExpPatt1 = "expected a pattern after '/'",
 
-  {"ExpPatt2", "expected a pattern after '&'"},
-  {"ExpPatt3", "expected a pattern after '!'"},
+  ExpPatt2 = "expected a pattern after '&'",
+  ExpPatt3 = "expected a pattern after '!'",
 
-  {"ExpPatt4", "expected a pattern after '('"},
-  {"ExpPatt5", "expected a pattern after ':'"},
-  {"ExpPatt6", "expected a pattern after '{~'"},
-  {"ExpPatt7", "expected a pattern after '{|'"},
+  ExpPatt4 = "expected a pattern after '('",
+  ExpPatt5 = "expected a pattern after ':'",
+  ExpPatt6 = "expected a pattern after '{~'",
+  ExpPatt7 = "expected a pattern after '{|'",
 
-  {"ExpPatt8", "expected a pattern after '<-'"},
+  ExpPatt8 = "expected a pattern after '<-'",
 
-  {"ExpPattOrClose", "expected a pattern or closing '}' after '{'"},
+  ExpPattOrClose = "expected a pattern or closing '}' after '{'",
 
-  {"ExpNum", "expected a number after '^', '+' or '-' (no space)"},
-  {"ExpCap", "expected a string, number, '{}' or name after '->'"},
+  ExpNumName = "expected a number, '+', '-' or a name (no space) after '^'",
+  ExpCap = "expected a string, number, '{}' or name after '->'",
 
-  {"ExpName1", "expected the name of a rule after '=>'"},
-  {"ExpName2", "expected the name of a rule after '=' (no space)"},
-  {"ExpName3", "expected the name of a rule after '<' (no space)"},
+  ExpName1 = "expected the name of a rule after '=>'",
+  ExpName2 = "expected the name of a rule after '=' (no space)",
+  ExpName3 = "expected the name of a rule after '<' (no space)",
 
-  {"ExpLab1", "expected at least one label after '{'"},
-  {"ExpLab2", "expected a label after the comma"},
+  ExpLab1 = "expected a label after '{'",
 
-  {"ExpNameOrLab", "expected a name or label after '%' (no space)"},
+  ExpNameOrLab = "expected a name or label after '%' (no space)",
 
-  {"ExpItem", "expected at least one item after '[' or '^'"},
+  ExpItem = "expected at least one item after '[' or '^'",
 
-  {"MisClose1", "missing closing ')'"},
-  {"MisClose2", "missing closing ':}'"},
-  {"MisClose3", "missing closing '~}'"},
-  {"MisClose4", "missing closing '|}'"},
-  {"MisClose5", "missing closing '}'"},  -- for the captures
+  MisClose1 = "missing closing ')'",
+  MisClose2 = "missing closing ':}'",
+  MisClose3 = "missing closing '~}'",
+  MisClose4 = "missing closing '|}'",
+  MisClose5 = "missing closing '}'",  -- for the captures
 
-  {"MisClose6", "missing closing '>'"},
-  {"MisClose7", "missing closing '}'"},  -- for the labels
+  MisClose6 = "missing closing '>'",
+  MisClose7 = "missing closing '}'",  -- for the labels
 
-  {"MisClose8", "missing closing ']'"},
+  MisClose8 = "missing closing ']'",
 
-  {"MisTerm1", "missing terminating single quote"},
-  {"MisTerm2", "missing terminating double quote"},
+  MisTerm1 = "missing terminating single quote",
+  MisTerm2 = "missing terminating double quote",
 }
 
-local errmsgs = {}
-local labels = {}
-
-for i, err in ipairs(errinfo) do
-  errmsgs[i] = err[2]
-  labels[err[1]] = i
-end
-
-local function expect (pattern, labelname)
-  local label = labels[labelname]
+local function expect (pattern, label)
   return pattern + m.T(label)
 end
 
 
 -- Pre-defined names
 local Predef = { nl = m.P"\n" }
-local tlabels = {}
 
 
 local mem
@@ -216,40 +205,10 @@ local function NT (n, b)
   end
 end
 
-local function choicerec (...)
-  local t = { ... }
-  local n = #t
-  local p = t[1]
-  local i = 2
-
-  while i + 2 <= n do
-    -- t[i] is '/' or '//'
-    -- t[i+1] == false  when there are no labels
-		-- t[i+2] is a pattern
-		if t[i] == '/' then
-			if not t[i+1] then
-				p = mt.__add(p, t[i+2])
-			else
-				p = mm.Lc(p, t[i+2], unpack(t[i+1]))
-			end 
-		else -- t[i] is '//'
-				p = mm.Rec(p, t[i+2], unpack(t[i+1]))
-		end
-    i = i + 3
-  end
-
-  return p
-end
 
 local exp = m.P{ "Exp",
   Exp = S * ( m.V"Grammar"
-            + (m.V"Seq" * (S * ((m.C(m.P"//" + "/") * m.Ct(m.V"Labels")) + (m.C"/" * m.Cc(false)))
-                                   * expect(S * m.V"Seq", "ExpPatt1")
-                            )^0
-              ) / choicerec);
-  Labels = m.P"{" * expect(S * m.V"Label", "ExpLab1")
-           * (S * "," * expect(S * m.V"Label", "ExpLab2"))^0
-           * expect(S * "}", "MisClose7");
+              + m.Cf(m.V"Seq" * (S * "/" * expect(S * m.V"Seq", "ExpPatt1"))^0, mt.__add) );
   Seq = m.Cf(m.Cc(m.P"") * m.V"Prefix" * (S * m.V"Prefix")^0, mt.__mul);
   Prefix = "&" * expect(S * m.V"Prefix", "ExpPatt2") / mt.__len
          + "!" * expect(S * m.V"Prefix", "ExpPatt3") / mt.__unm
@@ -260,8 +219,9 @@ local exp = m.P{ "Exp",
                 + m.P"?" * m.Cc(-1, mt.__pow)
                 + "^" * expect( m.Cg(num * m.Cc(mult))
                               + m.Cg(m.C(m.S"+-" * m.R"09"^1) * m.Cc(mt.__pow)
+                              + name * m.Cc"lab"
                               ),
-                          "ExpNum")
+                          "ExpNumName")
                 + "->" * expect(S * ( m.Cg((String + num) * m.Cc(mt.__div))
                                     + m.P"{}" * m.Cc(nil, m.Ct)
                                     + m.Cg(Def / getdef * m.Cc(mt.__div))
@@ -270,7 +230,7 @@ local exp = m.P{ "Exp",
                 + "=>" * expect(S * m.Cg(Def / getdef * m.Cc(m.Cmt)),
                            "ExpName1")
                 )
-          )^0, function (a,b,f) return f(a,b) end );
+          )^0, function (a,b,f) if f == "lab" then return a + mm.T(b) else return f(a,b) end end );
   Primary = "(" * expect(m.V"Exp", "ExpPatt4") * expect(S * ")", "MisClose1")
           + String / mm.P
           + Class
@@ -293,7 +253,7 @@ local exp = m.P{ "Exp",
           + m.P"." * m.Cc(any)
           + (name * -arrow + "<" * expect(name, "ExpName3")
              * expect(">", "MisClose6")) * m.Cb("G") / NT;
-  Label = num + name / function (f) return tlabels[f] end;
+  Label = num + name;
   Definition = name * arrow * expect(m.V"Exp", "ExpPatt8");
   Grammar = m.Cg(m.Cc(true), "G")
             * m.Cf(m.V"Definition" / firstdef * (S * m.Cg(m.V"Definition"))^0,
@@ -334,7 +294,7 @@ end
 local function compile (p, defs)
   if mm.type(p) == "pattern" then return p end   -- already compiled
   p = p .. " " -- for better reporting of column numbers in errors when at EOF
-  local ok, cp, label, suffix = pcall(function() return pattern:match(p, 1, defs) end)
+  local ok, cp, label, poserr = pcall(function() return pattern:match(p, 1, defs) end)
   if not ok and cp then
     if type(cp) == "string" then
       cp = cp:gsub("^[^:]+:[^:]+: ", "")
@@ -343,10 +303,9 @@ local function compile (p, defs)
   end
   if not cp then
     local lines = splitlines(p)
-    local line, col = lineno(p, #p - #suffix + 1)
-    --local line, col = calcline(p, #p - #suffix + 1)
+    local line, col = lineno(p, poserr)
     local err = {}
-    tinsert(err, "L" .. line .. ":C" .. col .. ": " .. errmsgs[label])
+    tinsert(err, "L" .. line .. ":C" .. col .. ": " .. errinfo[label])
     tinsert(err, lines[line])
     tinsert(err, rep(" ", col-1) .. "^")
     error("syntax error(s) in pattern\n" .. concat(err, "\n"), 3)
@@ -388,10 +347,6 @@ local function gsub (s, p, rep)
   return cp:match(s)
 end
 
-local function setlabels (t)
-  tlabels = t
-end
-
 
 -- exported names
 local re = {
@@ -400,7 +355,6 @@ local re = {
   find = find,
   gsub = gsub,
   updatelocale = updatelocale,
-  setlabels = setlabels,
 	calcline = calcline
 }
 

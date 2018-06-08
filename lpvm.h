@@ -21,6 +21,7 @@ typedef enum Opcode {
   IRet,  /* return from a rule */
   IEnd,  /* end of pattern */
   IChoice,  /* stack a choice; next fail will jump to 'offset' */
+  IPredChoice,  /* labeld failure: stack a choice; changes label env next fail will jump to 'offset' */
   IJmp,  /* jump to 'offset' */
   ICall,  /* call rule at 'offset' */
   IOpenCall,  /* call rule number 'key' (must be closed to a ICall) */
@@ -34,9 +35,8 @@ typedef enum Opcode {
   IOpenCapture,  /* start a capture */
   ICloseCapture,
   ICloseRunTime,
-  IThrow,   /* "fails" with a specific label labeled failure */
-  IRecov,    /* stack a recovery; next fail with label 'f' will jump to 'offset' */
-  ILabChoice /* stack a choice; next fail with label 'f' will jump to 'offset' */
+  IThrow,    /* fails with a given label */
+  IThrowRec, /* fails with a given label and call rule at 'offset' */
 } Opcode;
 
 
@@ -54,7 +54,7 @@ typedef union Instruction {
 
 void printpatt (Instruction *p, int n);
 const char *match (lua_State *L, const char *o, const char *s, const char *e,
-                   Instruction *op, Capture *capture, int ptop, byte *labelf, const char **sfail); /* labeled failure */
+                   Instruction *op, Capture *capture, int ptop, short *labelf, const char **sfail); /* labeled failure */
 
 
 #endif
