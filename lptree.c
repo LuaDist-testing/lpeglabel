@@ -706,8 +706,8 @@ static int lp_throw (lua_State *L) {
 	Labelset ls = 0;
 	int i;
 	for (i = 1; i <= n; i++) {
-		int d = luaL_checkint(L, i);
-		luaL_argcheck(L, d >= 0 && d < (int)MAXLABELS, i, "invalid label index");
+		long long int d = (long long int)luaL_checkinteger(L, i);
+		luaL_argcheck(L, d >= 0 && d < (long long int)MAXLABELS, i, "invalid label index");
 		setlabel(ls, d);
 	}
 	newlabelleaf(L, ls);
@@ -723,8 +723,8 @@ static int lp_labchoice (lua_State *L) {
 	int i;
 	Labelset ls = 0;
 	for (i = 3; i <= n; i++) {
-		int d = luaL_checkint(L, i);
-		luaL_argcheck(L, d >= 0 && d < (int)MAXLABELS, i, "invalid label index");
+		long long int d = (long long int)luaL_checkinteger(L, i);
+		luaL_argcheck(L, d >= 0 && d < (long long int)MAXLABELS, i, "invalid label index");
 		setlabel(ls, d);
 	}
   tree = newroot2sib(L, TLabChoice);
@@ -1198,22 +1198,26 @@ static int lp_match (lua_State *L) {
   size_t i = initposition(L, l);
   int ptop = lua_gettop(L);
   Labelset labelf; /* labeled failure */
+  const char *sfail = NULL; /* labeled failure */
   lua_pushnil(L);  /* initialize subscache */
   lua_pushlightuserdata(L, capture);  /* initialize caplistidx */
   lua_getfenv(L, 1);  /* initialize penvidx */
-  r = match(L, s, s + i, s + l, code, capture, ptop, &labelf); /* labeled failure */
+  r = match(L, s, s + i, s + l, code, capture, ptop, &labelf, &sfail); /* labeled failure */
+	/*printf("sfail = %s\n", sfail);*/
   if (r == NULL) { /* labeled failure begin */
-    int j = 0;
+    long long int j = 0;
     int n = 1;
     lua_pushnil(L);
-    while (j < (int) MAXLABELS) {
-      if (labelf & (1 << j)) {	
+    while (j < (long long int) MAXLABELS) {
+      if (labelf & (1ULL << j)) {	
         lua_pushinteger(L, j);
         n++;
+				break; /* Changing the semantics: only one label */
       }
       j++;
     }
-    return n;
+		lua_pushstring(L, sfail); /* Pushing the subject where the failure occurred */
+    return n + 1;
   }  /* labeled failure end */
   return getcaptures(L, s, r, ptop);
 }

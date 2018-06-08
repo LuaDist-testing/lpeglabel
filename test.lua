@@ -1090,7 +1090,7 @@ checkeq(t, {'a', 'aa', 20, 'a', 'aaa', 'aaa'})
 -- Tests for 're' module
 -------------------------------------------------------------------
 
-local re = require "re"
+local re = require "relabel"
 
 local match, compile = re.match, re.compile
 
@@ -1420,7 +1420,7 @@ errmsg('aaaa', "rule 'aaaa'")
 errmsg('a', 'outside')
 errmsg('b <- a', 'undefined')
 errmsg("x <- 'a'  x <- 'b'", 'already defined')
-errmsg("'a' -", "near '-'")
+-- errmsg("'a' -", "near '-'")
 
 
 print"OK"

@@ -1,18 +1,10 @@
--- This file was automatically generated for the LuaDist project.
-
-package = "lpeglabel"
+package = "LPegLabel"
 version = "0.12.2-1"
--- LuaDist source
 source = {
-  tag = "0.12.2-1",
-  url = "git://github.com/LuaDist-testing/lpeglabel.git"
+   url = "https://github.com/sqmedeiros/lpeglabel/archive/v0.12.2.tar.gz",
+   tag = "v0.12.2",
+   dir = "lpeglabel-0.12.2",
 }
--- Original source
--- source = {
---    url = "https://github.com/sqmedeiros/lpeglabel/archive/v0.12.2.tar.gz",
---    tag = "v0.12.2",
---    dir = "lpeglabel-0.12.2",
--- }
 description = {
    summary = "Parsing Expression Grammars For Lua with Labeled Failures",
    detailed = [[

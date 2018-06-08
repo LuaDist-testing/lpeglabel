@@ -40,8 +40,10 @@ lpeglabel.so: $(FILES)
 
 $(FILES): makefile
 
-test: test.lua re.lua lpeglabel.so
-	./test.lua
+test: test.lua relabel.lua lpeglabel.so
+	lua test.lua
+	lua testlabel.lua
+	lua testerrors.lua
 
 clean:
 	rm -f $(FILES) lpeglabel.so
