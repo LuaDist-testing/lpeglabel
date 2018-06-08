@@ -1,17 +1,17 @@
 -- This file was automatically generated for the LuaDist project.
 
 package = "lpeglabel"
-version = "1.3.0-1"
+version = "1.4.0-1"
 -- LuaDist source
 source = {
-  tag = "1.3.0-1",
+  tag = "1.4.0-1",
   url = "git://github.com/LuaDist-testing/lpeglabel.git"
 }
 -- Original source
 -- source = {
---    url = "https://github.com/sqmedeiros/lpeglabel/archive/v1.3.0-1.tar.gz",
---    tag = "v1.3.0-1",
---    dir = "lpeglabel-1.3.0-1",
+--    url = "https://github.com/sqmedeiros/lpeglabel/archive/v1.4.0-1.tar.gz",
+--    tag = "v1.4.0-1",
+--    dir = "lpeglabel-1.4.0-1",
 -- }
 description = {
    summary = "Parsing Expression Grammars For Lua with Labeled Failures",
@@ -19,7 +19,7 @@ description = {
      LPegLabel is a conservative extension of the LPeg library that provides
      an implementation of Parsing Expression Grammars (PEGs) with labeled failures. 
      Labels can be used to signal different kinds of erros and to specify which recovery
-     pattern should handle a given label. 
+     pattern or labeled choice should handle a given label. 
      LPegLabel also reports the farthest failure position in case of an ordinary failure.
    ]],
    homepage = "https://github.com/sqmedeiros/lpeglabel/",
