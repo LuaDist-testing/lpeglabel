@@ -26,7 +26,6 @@ CFLAGS = $(CWARNS) $(COPT) -std=c99 -I$(LUADIR) -fPIC
 CC = gcc
 
 FILES = lpvm.o lpcap.o lptree.o lpcode.o lpprint.o
-
 # For Linux
 linux:
 	make lpeglabel.so "DLLFLAGS = -shared -fPIC"
@@ -35,15 +34,21 @@ linux:
 macosx:
 	make lpeglabel.so "DLLFLAGS = -bundle -undefined dynamic_lookup"
 
+# For Windows
+windows:
+	make lpeglabel.dll "DLLFLAGS = -shared -fPIC"
+
 lpeglabel.so: $(FILES)
 	env $(CC) $(DLLFLAGS) $(FILES) -o lpeglabel.so
+lpeglabel.dll: $(FILES)
+	$(CC) $(DLLFLAGS) $(FILES) -o lpeglabel.dll $(LUADIR)/bin/lua53.dll
 
 $(FILES): makefile
 
-test: test.lua testlabel.lua testerrors.lua relabel.lua lpeglabel.so
+test: test.lua testlabel.lua testrelabelparser.lua relabel.lua lpeglabel.so
 	lua test.lua
 	lua testlabel.lua
-	lua testerrors.lua
+	lua testrelabelparser.lua
 
 clean:
 	rm -f $(FILES) lpeglabel.so
