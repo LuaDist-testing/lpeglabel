@@ -1,5 +1,5 @@
 /*
-** $Id: lpprint.c,v 1.7 2013/04/12 16:29:49 roberto Exp $
+** $Id: lpprint.c,v 1.9 2015/06/15 16:09:57 roberto Exp $
 ** Copyright 2007, Lua.org & PUC-Rio  (see 'lpeg.html' for license)
 */
 
@@ -52,7 +52,7 @@ static void printjmp (const Instruction *op, const Instruction *p) {
 }
 
 
-static void printinst (const Instruction *op, const Instruction *p) {
+void printinst (const Instruction *op, const Instruction *p) {
   const char *const names[] = {
     "any", "char", "set",
     "testany", "testchar", "testset",
@@ -61,7 +61,7 @@ static void printinst (const Instruction *op, const Instruction *p) {
     "choice", "jmp", "call", "open_call",
     "commit", "partial_commit", "back_commit", "failtwice", "fail", "giveup",
      "fullcapture", "opencapture", "closecapture", "closeruntime",
-    "throw", "labeled_choice" /* labeled failure */
+    "throw", "labeled_choice", "recovery" /* labeled failure */
   };
   printf("%02ld: %s ", (long)(p - op), names[p->i.code]);
   switch ((Opcode)p->i.code) {
@@ -109,12 +109,12 @@ static void printinst (const Instruction *op, const Instruction *p) {
       break;
     }
     case IThrow: { /* labeled failure */
-      printf("%d", (p + 1)->labels);
+      printf("%d", p->i.aux);
       break;
     }
-		case ILabChoice: { /* labeled failure */
+		case ILabChoice: case IRecov: { /* labeled failure */
       printjmp(op, p);
-			printf(" %d", (p + 2)->labels);
+      printcharset((p+2)->buff);
       break;
     }
     default: break;
@@ -165,7 +165,7 @@ static const char *tagnames[] = {
   "call", "opencall", "rule", "grammar",
   "behind",
   "capture", "run-time",
-  "throw", "labeled-choice"  /* labeled failure */
+  "throw", "labeled-choice", "recov"  /* labeled failure */
 };
 
 
@@ -217,14 +217,15 @@ void printtree (TTree *tree, int ident) {
       break;
     }
     case TThrow: { /* labeled failure */
-      printf(" labels: %d\n", tree->labels);
+      printf(" labels: %d\n", tree->u.label);
       break;
     }
     default: {
       int sibs = numsiblings[tree->tag];
       printf("\n");
-      if (tree->tag == TLabChoice) { /* labeled failure */
-      	printf(" labels: %d\n", tree->labels);
+      if (tree->tag == TLabChoice || tree->tag == TRecov) { /* labeled failure */
+      	printcharset(treelabelset(tree));
+      	printf("\n");
 			}
       if (sibs >= 1) {
         printtree(sib1(tree), ident + 2);
@@ -239,10 +240,10 @@ void printtree (TTree *tree, int ident) {
 
 void printktable (lua_State *L, int idx) {
   int n, i;
-  lua_getfenv(L, idx);
+  lua_getuservalue(L, idx);
   if (lua_isnil(L, -1))  /* no ktable? */
     return;
-  n = lua_objlen(L, -1);
+  n = lua_rawlen(L, -1);
   printf("[");
   for (i = 1; i <= n; i++) {
     printf("%d = ", i);

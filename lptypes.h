@@ -1,7 +1,7 @@
 /*
-** $Id: lptypes.h,v 1.11 2015/03/04 16:38:00 roberto Exp $
+** $Id: lptypes.h,v 1.14 2015/09/28 17:17:41 roberto Exp $
 ** LPeg - PEG pattern matching for Lua
-** Copyright 2007-2014, Lua.org & PUC-Rio  (see 'lpeg.html' for license)
+** Copyright 2007-2015, Lua.org & PUC-Rio  (see 'lpeg.html' for license)
 ** written by Roberto Ierusalimschy
 */
 
@@ -19,7 +19,7 @@
 #include "lua.h"
 
 
-#define VERSION         "0.12.2"
+#define VERSION         "1.0.0"
 
 
 #define PATTERN_T	"lpeg-pattern"
@@ -27,31 +27,31 @@
 
 
 /*
-** compatibility with Lua 5.2
+** compatibility with Lua 5.1
 */
-#if (LUA_VERSION_NUM >= 502)
+#if (LUA_VERSION_NUM == 501)
 
-#undef lua_equal
-#define lua_equal(L,idx1,idx2)  lua_compare(L,(idx1),(idx2),LUA_OPEQ)
+#define lp_equal	lua_equal
 
-#undef lua_getfenv
-#define lua_getfenv	lua_getuservalue
-#undef lua_setfenv
-#define lua_setfenv	lua_setuservalue
+#define lua_getuservalue	lua_getfenv
+#define lua_setuservalue	lua_setfenv
 
-#undef lua_objlen
-#define lua_objlen	lua_rawlen
+#define lua_rawlen		lua_objlen
 
-#undef luaL_register
-#define luaL_register(L,n,f) \
-	{ if ((n) == NULL) luaL_setfuncs(L,f,0); else luaL_newlib(L,f); }
+#define luaL_setfuncs(L,f,n)	luaL_register(L,NULL,f)
+#define luaL_newlib(L,f)	luaL_register(L,"lpeg",f)
 
+#endif
+
+
+#if !defined(lp_equal)
+#define lp_equal(L,idx1,idx2)  lua_compare(L,(idx1),(idx2),LUA_OPEQ)
 #endif
 
 
 /* default maximum size for call/backtrack stack */
 #if !defined(MAXBACK)
-#define MAXBACK         100
+#define MAXBACK         400
 #endif
 
 
@@ -110,18 +110,6 @@ typedef struct Charset {
 #define setchar(cs,b)   ((cs)[(b) >> 3] |= (1 << ((b) & 7)))
 
 
-/* labeled failure begin */
-typedef long long int Labelset;
-
-#define MAXLABELS (sizeof(long long int) * 8)
-
-#define LFAIL 1
-
-/* set bit 'b' in set 's' */
-#define setlabel(s, b) ((s) |= (1ULL << (b)))
-/* labeled failure end */
-
-
 /*
 ** in capture instructions, 'kind' of capture and its offset are
 ** packed in field 'aux', 4 bits for each
@@ -156,6 +144,24 @@ typedef long long int Labelset;
 
 #define testchar(st,c)	(((int)(st)[((c) >> 3)] & (1 << ((c) & 7))))
 
+/* labeled failure begin */
+#define MAXLABELS (UCHAR_MAX + 1)
+
+#define LABELSETSIZE CHARSETSIZE
+
+typedef Charset Labelset;
+
+#define setlabel setchar
+
+#define testlabel testchar
+
+/* access to labelset */
+#define treelabelset(t)      ((byte *)((t) + (t)->u.s.plab))
+
+#define IDXLFAIL 0
+
+#define LFAIL 0
+/* labeled failure end */
 
 #endif
 

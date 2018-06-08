@@ -2,6 +2,15 @@ local m = require 'lpeglabel'
 
 local p, r, l, s, serror
 
+local function checkeqlab (x, ...)
+  y = { ... }
+  assert(type(x) == "table")
+  assert(#x == #y)
+  for i = 1, 3 do
+    assert(x[i] == y[i])
+  end
+end
+
 -- throws a label 
 p = m.T(1)
 s = "abc"
@@ -179,6 +188,24 @@ assert(p:match("abc") == 2)
 
 r, l, serror = p:match("")
 assert(r == nil and l == 0 and serror == "")
+
+-- testing the limit of labels
+p = m.T(0)
+s = "abc"
+r, l, serror = p:match(s) 
+assert(r == nil and l == 0 and serror == "abc")
+
+p = m.T(255)
+s = "abc"
+r, l, serror = p:match(s) 
+assert(r == nil and l == 255 and serror == "abc")
+
+local r = pcall(m.T, -1)
+assert(r == false)
+
+local r = pcall(m.T, 256)
+assert(r == false)
+
 
 print("+")
 
@@ -520,4 +547,186 @@ A := a;]]
 assert(g:match(s) == terror['undefined']) 
 
 
+print("+")
+
+
+-- test recovery operator
+p = m.Rec("a", "b") 
+assert(p:match("a") == 2)
+assert(p:match("b") == 2)
+checkeqlab({nil, 0, "c"}, p:match("c"))
+
+p = m.Rec("a", "b", 3) 
+assert(p:match("a") == 2)
+checkeqlab({nil, 0, "b"}, p:match("b"))
+checkeqlab({nil, 0, "c"}, p:match("c"))
+
+p = m.Rec(m.T(3), "b") 
+checkeqlab({nil, 3, "a"}, p:match("a"))
+checkeqlab({nil, 3, "b"}, p:match("b"))
+
+p = m.Rec(m.T(3), "b", 3) 
+checkeqlab({nil, 0, "a"}, p:match("a"))
+assert(p:match("b") == 2)
+
+--[[
+S -> (A //{fail} (!c .)*) C
+A -> a*b 
+C -> c+
+]]
+g = m.P{
+	"S",
+	S = m.Rec(m.V"A", (-m.P"c" * m.P(1))^0) * m.V"C",
+	A = m.P"a"^0 * "b",
+	C = m.P"c"^1,
+}
+
+assert(g:match("abc") == 4)
+assert(g:match("aabc") == 5)
+assert(g:match("aadc") == 5)
+assert(g:match("bc") == 3)
+checkeqlab({nil, 0, "bc"}, g:match("bbc"))
+assert(g:match("xxc") == 4)
+assert(g:match("c") == 2)
+checkeqlab({nil, 0, ""}, g:match("fail"))
+checkeqlab({nil, 0, ""}, g:match("aaxx"))
+
+--[[
+S -> (A //{99} (!c .)*) C
+A -> a+ (b / ^99) 
+C -> c+
+]]
+g = m.P{
+	"S",
+	S = m.Rec(m.V"A", (-m.P"c" * m.P(1))^0, 99) * m.V"C",
+	A = m.P"a"^1 * ("b" + m.T(99)),
+	C = m.P"c"^1,
+}
+
+assert(g:match("abc") == 4)
+assert(g:match("aabc") == 5)
+assert(g:match("aadc") == 5)
+checkeqlab({nil, 0, "bc"}, g:match("bc"))
+checkeqlab({nil, 0, "bbc"}, g:match("bbc"))
+checkeqlab({nil, 0, "b"}, g:match("abb"))
+checkeqlab({nil, 0, ""}, g:match("axx"))
+assert(g:match("accc") == 5)
+assert(g:match("axxc") == 5)
+checkeqlab({nil, 0, "c"}, g:match("c"))
+checkeqlab({nil, 0, "fail"}, g:match("fail"))
+
+
+
+-- Matthew's recovery example 
+lpeg = m
+
+local R, S, P, V = lpeg.R, lpeg.S, lpeg.P, lpeg.V
+local C, Cc, Ct, Cmt = lpeg.C, lpeg.Cc, lpeg.Ct, lpeg.Cmt
+local T, Lc = lpeg.T, lpeg.Lc
+
+local labels = {
+  {"NoExp",     "no expression found"},
+  {"Extra",     "extra characters found after the expression"},
+  {"ExpTerm",   "expected a term after the operator"},
+  {"ExpExp",    "expected an expression after the parenthesis"},
+  {"MisClose",  "missing a closing ')' after the expression"},
+}
+
+local function labelindex(labname)
+  for i, elem in ipairs(labels) do
+    if elem[1] == labname then
+      return i
+    end
+  end
+  error("could not find label: " .. labname)
+end
+
+local errors = {}
+
+local function expect(patt, labname)
+  local i = labelindex(labname)
+  function recorderror(input, pos)
+    table.insert(errors, {i, pos})
+    return true
+  end
+  return patt + Cmt("", recorderror) * T(i)
+end
+
+local num = R("09")^1 / tonumber
+local op = S("+-*/")
+
+local function compute(tokens)
+  local result = tokens[1]
+  for i = 2, #tokens, 2 do
+    if tokens[i] == '+' then
+      result = result + tokens[i+1]
+    elseif tokens[i] == '-' then
+      result = result - tokens[i+1]
+    elseif tokens[i] == '*' then
+      result = result * tokens[i+1]
+    elseif tokens[i] == '/' then
+      result = result / tokens[i+1]
+    else
+      error('unknown operation: ' .. tokens[i])
+    end
+  end
+  return result
+end
+
+local g = P {
+  "Exp",
+  Exp = Ct(V"Term" * (C(op) * V"OpRecov")^0) / compute;
+  OpRecov = m.Rec(V"Operand", Cc(0), labelindex("ExpTerm"));
+  Operand = expect(V"Term", "ExpTerm");
+  Term = num + V"Group";
+  Group = "(" * V"InnerExp" * m.Rec(expect(")", "MisClose"), P"", labelindex("MisClose"));
+  InnerExp = m.Rec(expect(V"Exp", "ExpExp"), (P(1) - ")")^0 * Cc(0), labelindex("ExpExp"));
+}
+
+g = expect(g, "NoExp") * expect(-P(1), "Extra")
+
+local function eval(input)
+  local result, label, suffix = g:match(input)
+  if #errors == 0 then
+    return result
+  else
+    local out = {}
+    for i, err in ipairs(errors) do
+      local pos = err[2]
+      local msg = labels[err[1]][2]
+      table.insert(out, "syntax error: " .. msg .. " (at index " .. pos .. ")")
+    end
+    errors = {}
+    return nil, table.concat(out, "\n")
+  end
+end
+
+print(eval "98-76*(54/32)")
+--> 37.125
+
+print(eval "(1+1-1*2/2")
+--> syntax error: missing a closing ')' after the expression (at index 11)
+
+print(eval "(1+)-1*(2/2)")
+--> syntax error: expected a term after the operator (at index 4)
+
+print(eval "(1+1)-1*(/2)")
+--> syntax error: expected an expression after the parenthesis (at index 10)
+
+print(eval "1+(1-(1*2))/2x")
+--> syntax error: extra chracters found after the expression (at index 14)
+
+print(eval "-1+(1-(1*2))/2")
+--> syntax error: no expression found (at index 1)
+
+print(eval "(1+1-1*(2/2+)-():")
+--> syntax error: expected a term after the operator (at index 13)
+--> syntax error: expected an expression after the parenthesis (at index 16)
+--> syntax error: missing a closing ')' after the expression (at index 17)
+--> syntax error: extra characters found after the expression (at index 
+
+
+
+
 print("OK")
+

@@ -35,7 +35,8 @@ typedef enum Opcode {
   ICloseCapture,
   ICloseRunTime,
   IThrow,   /* "fails" with a specific label labeled failure */
-  ILabChoice   /* labeled choice */
+  ILabChoice,   /* labeled choice */
+  IRecov    /* stack a recovery; next fail with label 'f' will jump to 'offset'  */
 } Opcode;
 
 
@@ -47,14 +48,13 @@ typedef union Instruction {
     short key;
   } i;
   int offset;
-  Labelset labels; /* labeled failure */
   byte buff[1];
 } Instruction;
 
 
 void printpatt (Instruction *p, int n);
 const char *match (lua_State *L, const char *o, const char *s, const char *e,
-                   Instruction *op, Capture *capture, int ptop, Labelset *labelf, const char **sfail); /* labeled failure */
+                   Instruction *op, Capture *capture, int ptop, byte *labelf, const char **sfail); /* labeled failure */
 
 
 #endif

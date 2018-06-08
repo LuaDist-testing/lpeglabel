@@ -1,5 +1,5 @@
 /*
-** $Id: lpvm.c,v 1.5 2013/04/12 16:29:49 roberto Exp $
+** $Id: lpvm.c,v 1.6 2015/09/28 17:01:25 roberto Exp $
 ** Copyright 2007, Lua.org & PUC-Rio  (see 'lpeg.html' for license)
 */
 
@@ -18,7 +18,7 @@
 
 /* initial size for call/backtrack stack */
 #if !defined(INITBACK)
-#define INITBACK	100
+#define INITBACK	MAXBACK
 #endif
 
 
@@ -26,6 +26,12 @@
 
 static const Instruction giveup = {{IGiveup, 0, 0}};
 
+/* labeled failure */
+static void setlabelfail(Labelset *ls) { 
+	loopset(i, ls->cs[i] = 0); 
+  ls->cs[IDXLFAIL] = 1;
+}
+/* labeled failure end */
 
 /*
 ** {======================================================
@@ -37,8 +43,8 @@ static const Instruction giveup = {{IGiveup, 0, 0}};
 typedef struct Stack {
   const char *s;  /* saved position (or NULL for calls) */
   const Instruction *p;  /* next instruction */
+  const Labelset *ls; /* labeled failure */
   int caplevel;
-  Labelset ls; /* labeled failure */
 } Stack;
 
 
@@ -71,7 +77,7 @@ static Stack *doublestack (lua_State *L, Stack **stacklimit, int ptop) {
   max = lua_tointeger(L, -1);  /* maximum allowed size */
   lua_pop(L, 1);
   if (n >= max)  /* already at maximum size? */
-    luaL_error(L, "too many pending calls/choices");
+    luaL_error(L, "backtrack stack overflow (current limit is %d)", max);
   newn = 2 * n;  /* new size */
   if (newn > max) newn = max;
   newstack = (Stack *)lua_newuserdata(L, newn * sizeof(Stack));
@@ -142,11 +148,13 @@ static int removedyncap (lua_State *L, Capture *capture,
 }
 
 
+
+
 /*
 ** Opcode interpreter
 */
 const char *match (lua_State *L, const char *o, const char *s, const char *e,
-                   Instruction *op, Capture *capture, int ptop, Labelset *labelf, const char **sfail) { /* labeled failure */
+                   Instruction *op, Capture *capture, int ptop, byte *labelf, const char **sfail) { /* labeled failure */
   Stack stackbase[INITBACK];
   Stack *stacklimit = stackbase + INITBACK;
   Stack *stack = stackbase;  /* point to first empty slot in stack */
@@ -154,7 +162,9 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
   int captop = 0;  /* point to first empty slot in captures */
   int ndyncap = 0;  /* number of dynamic captures (in Lua stack) */
   const Instruction *p = op;  /* current instruction */
-  stack->p = &giveup; stack->s = s; stack->caplevel = 0; stack++;
+	Labelset lsfail;
+	setlabelfail(&lsfail);
+  stack->p = &giveup; stack->s = s; stack->ls = &lsfail; stack->caplevel = 0; stack++;  /* labeled failure */
   lua_pushlightuserdata(L, stackbase);
   for (;;) {
 #if defined(DEBUG)
@@ -253,7 +263,7 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
           stack = doublestack(L, &stacklimit, ptop);
         stack->p = p + getoffset(p);
         stack->s = s;
-        stack->ls = LFAIL; /* labeled failure */
+        stack->ls = &lsfail; /* labeled failure */
         stack->caplevel = captop;
         stack++;
         p += 2;
@@ -264,23 +274,37 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
           stack = doublestack(L, &stacklimit, ptop);
         stack->p = p + getoffset(p);
         stack->s = s;
-        stack->ls = (p + 2)->labels;
+        stack->ls = (const Labelset *) ((p + 2)->buff);
         stack->caplevel = captop;
         stack++;
-        p += 3;
+        p += (CHARSETINSTSIZE - 1) + 2;
         continue;
       }
+			case IRecov: { /* labeled failure */
+        if (stack == stacklimit)
+          stack = doublestack(L, &stacklimit, ptop);
+        stack->p = p + getoffset(p);
+        stack->s = NULL;
+        stack->ls = (const Labelset *) ((p + 2)->buff);
+        stack->caplevel = captop;
+        stack++;
+        p += (CHARSETINSTSIZE - 1) + 2;
+        continue;
+      }
+
       case ICall: {
         if (stack == stacklimit)
           stack = doublestack(L, &stacklimit, ptop);
         stack->s = NULL;
         stack->p = p + 2;  /* save return address */
+        stack->ls = NULL;
         stack++;
         p += getoffset(p);
         continue;
       }
       case ICommit: {
-        assert(stack > getstackbase(L, ptop) && (stack - 1)->s != NULL);
+        assert(stack > getstackbase(L, ptop) && (stack - 1)->ls != NULL); /* labeled failure */
+        /* assert((stack - 1)->s != NULL); labeled failure: IRecov does not push s onto the stack */
         stack--;
         p += getoffset(p);
         continue;
@@ -300,9 +324,8 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
         continue;
       }
       case IThrow: { /* labeled failure */
-        *labelf = (p+1)->labels;
+        *labelf = p->i.aux;
 				*sfail = s;
-				/*printf("s = %s, sfail = %s\n", s, *sfail);*/
         goto fail;
       }
       case IFailTwice:
@@ -313,10 +336,14 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
       *labelf = LFAIL; /* labeled failure */
 			*sfail = s;
       fail: { /* pattern failed: try to backtrack */
+        const Labelset *auxlab = NULL;
         do {  /* remove pending calls */
           assert(stack > getstackbase(L, ptop));
-          s = (--stack)->s;
-        } while (s == NULL || (!(stack->ls & *labelf) && stack->p != &giveup));
+          auxlab = (--stack)->ls;
+        } while (auxlab == NULL || (stack->p != &giveup && !testlabel(stack->ls->cs, *labelf)));
+        if (stack->p == &giveup || stack->s != NULL) { /* labeled failure */
+					s = stack->s;
+				}
         if (ndyncap > 0)  /* is there matchtime captures? */
           ndyncap -= removedyncap(L, capture, stack->caplevel, captop);
         captop = stack->caplevel;
@@ -333,7 +360,7 @@ const char *match (lua_State *L, const char *o, const char *s, const char *e,
         fr -= rem;  /* 'rem' items were popped from Lua stack */
         res = resdyncaptures(L, fr, s - o, e - o);  /* get result */
         if (res == -1) { /* fail? */
-          *labelf = LFAIL; /* labeled failure */
+      		*labelf = LFAIL;  /* labeled failure */
 					*sfail = (const char *) s; /* TODO: ??? */
           goto fail;
         }

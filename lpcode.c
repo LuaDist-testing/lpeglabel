@@ -1,5 +1,5 @@
 /*
-** $Id: lpcode.c,v 1.21 2014/12/12 17:01:29 roberto Exp $
+** $Id: lpcode.c,v 1.23 2015/06/12 18:36:47 roberto Exp $
 ** Copyright 2007, Lua.org & PUC-Rio  (see 'lpeg.html' for license)
 */
 
@@ -192,12 +192,12 @@ int checkaux (TTree *tree, int pred) {
       if (!checkaux(sib1(tree), pred)) return 0;
       /* else return checkaux(sib2(tree), pred); */
       tree = sib2(tree); goto tailcall;
-    case TChoice: 
+    case TChoice:
       if (checkaux(sib2(tree), pred)) return 1;
       /* else return checkaux(sib1(tree), pred); */
       tree = sib1(tree); goto tailcall;
-		case TLabChoice: /* labeled failure */
-     /* in a labeled ordered choice we do not know whether sib2 will be evaluated */
+		case TLabChoice: case TRecov: /* labeled failure */
+     /* we do not know whether sib2 will be evaluated */
      tree = sib1(tree); goto tailcall;
     case TCapture: case TGrammar: case TRule:
       /* return checkaux(sib1(tree), pred); */
@@ -231,7 +231,7 @@ int fixedlenx (TTree *tree, int count, int len) {
         return -1;  /* may be a loop */
       /* else return fixedlenx(sib2(tree), count); */
       tree = sib2(tree); goto tailcall;
-    case TSeq: {
+    case TSeq: case TRecov: { /* labeled failure */
       len = fixedlenx(sib1(tree), count, len);
       if (len < 0) return -1;
       /* else return fixedlenx(sib2(tree), count, len); */
@@ -293,6 +293,12 @@ static int getfirst (TTree *tree, const Charset *follow, Charset *firstset) {
       int e2 = getfirst(sib2(tree), follow, &csaux);
       loopset(i, firstset->cs[i] |= csaux.cs[i]);
       return e1 | e2;
+    }
+    case TRecov: { /* labeled failure */
+        /* when p1 is not nullable, p2 has nothing to contribute;
+           and when p1 is nullable, then p2 will not match 
+           return getfirst(sib1(tree), fullset, firstset); */
+      tree = sib1(tree); follow = fullset; goto tailcall;
     }
     case TSeq: {
       if (!nullable(sib1(tree))) {
@@ -372,7 +378,7 @@ static int headfail (TTree *tree) {
       if (!nofail(sib2(tree))) return 0;
       /* else return headfail(sib1(tree)); */
       tree = sib1(tree); goto tailcall;
-    case TChoice: case TLabChoice:  /* labeled failure */
+    case TChoice: case TLabChoice: case TRecov: /* labeled failure */
       if (!headfail(sib1(tree))) return 0;
       /* else return headfail(sib2(tree)); */
       tree = sib2(tree); goto tailcall;
@@ -392,7 +398,7 @@ static int needfollow (TTree *tree) {
     case TChar: case TSet: case TAny:
     case TFalse: case TTrue: case TAnd: case TNot:
     case TRunTime: case TGrammar: case TCall: case TBehind:
-    case TThrow: case TLabChoice: /* (?)labeled failure */
+    case TThrow: case TLabChoice: case TRecov: /* (?)labeled failure */
       return 0;
     case TChoice: case TRep:
       return 1;
@@ -424,10 +430,11 @@ int sizei (const Instruction *i) {
     case ITestSet: return CHARSETINSTSIZE + 1;
     case ITestChar: case ITestAny: case IChoice: case IJmp: case ICall:
     case IOpenCall: case ICommit: case IPartialCommit: case IBackCommit:
-    case IThrow:  /* labeled failure */
-      return 2;  
-		case ILabChoice: return 3; /* labeled failure */
       return 2;
+    case IThrow:  /* labeled failure */ 
+			return 1;
+    case ILabChoice: case IRecov: 
+      return (CHARSETINSTSIZE - 1) + 2; /* labeled failure */
     default: return 1;
   }
 }
@@ -444,11 +451,11 @@ typedef struct CompileState {
 
 
 /*
-** code generation is recursive; 'opt' indicates that the code is
-** being generated under a 'IChoice' operator jumping to its end
-** (that is, the match is "optional").
-** 'tt' points to a previous test protecting this code. 'fl' is
-** the follow set of the pattern.
+** code generation is recursive; 'opt' indicates that the code is being
+** generated as the last thing inside an optional pattern (so, if that
+** code is optional too, it can reuse the 'IChoice' already in place for
+** the outer pattern). 'tt' points to a previous test protecting this
+** code (or NOINST). 'fl' is the follow set of the pattern.
 */
 static void codegen (CompileState *compst, TTree *tree, int opt, int tt,
                      const Charset *fl);
@@ -491,28 +498,11 @@ static int addinstruction (CompileState *compst, Opcode op, int aux) {
 static int addoffsetinst (CompileState *compst, Opcode op) {
   int i = addinstruction(compst, op, 0);  /* instruction */
   addinstruction(compst, (Opcode)0, 0);  /* open space for offset */
-  assert(op == ITestSet || sizei(&getinstr(compst, i)) == 2);
+  assert(op == ITestSet || sizei(&getinstr(compst, i)) == 2 || 
+        op == IRecov || op == ILabChoice); /* labeled failure */
   return i;
 }
 
-/* labeled failure begin */
-static int addthrowinstruction (CompileState *compst, Labelset ls) {
-  int i = nextinstruction(compst);
-  getinstr(compst, i).i.code = IThrow;
-  i = nextinstruction(compst);
-  getinstr(compst, i).labels = ls;
-  return i;
-}
-
-static int addoffsetlabinst (CompileState *compst, Labelset ls) {
-  int j;
-	int i = addinstruction(compst, ILabChoice, 0);  /* instruction */
-  addinstruction(compst, (Opcode)0, 0);  /* open space for offset */
-  j = nextinstruction(compst);  /* open space for labels */
-	getinstr(compst, j).labels = ls;
-  return i; 
-}
-/* labeled failure end */
 
 /*
 ** Set the offset of an instruction
@@ -669,13 +659,13 @@ static void codebehind (CompileState *compst, TTree *tree) {
 
 /*
 ** Choice; optimizations:
-** - when p1 is headfail
-** - when first(p1) and first(p2) are disjoint; than
+** - when p1 is headfail or
+** when first(p1) and first(p2) are disjoint, than
 ** a character not in first(p1) cannot go to p1, and a character
 ** in first(p1) cannot go to p2 (at it is not in first(p2)).
 ** (The optimization is not valid if p1 accepts the empty string,
 ** as then there is no character at all...)
-** - when p2 is empty and opt is true; a IPartialCommit can resuse
+** - when p2 is empty and opt is true; a IPartialCommit can reuse
 ** the Choice already active in the stack.
 */
 static void codechoice (CompileState *compst, TTree *p1, TTree *p2, int opt,
@@ -702,7 +692,7 @@ static void codechoice (CompileState *compst, TTree *p1, TTree *p2, int opt,
   }
   else {
     /* <p1 / p2> == 
-        test(fail(p1)) -> L1; choice L1; <p1>; commit L2; L1: <p2>; L2: */
+        test(first(p1)) -> L1; choice L1; <p1>; commit L2; L1: <p2>; L2: */
     int pcommit;
     int test = codetestset(compst, &cs1, e1);
     int pchoice = addoffsetinst(compst, IChoice);
@@ -718,18 +708,33 @@ static void codechoice (CompileState *compst, TTree *p1, TTree *p2, int opt,
 
 /* labeled failure begin */
 static void codelabchoice (CompileState *compst, TTree *p1, TTree *p2, int opt,
-                        const Charset *fl, Labelset ls) {
+                        const Charset *fl, const byte *cs) {
   	int emptyp2 = (p2->tag == TTrue);
 		int pcommit;
     int test = NOINST;
-    int pchoice = addoffsetlabinst(compst, ls);
+		int pchoice = addoffsetinst(compst, ILabChoice);
+		addcharset(compst, cs);
     codegen(compst, p1, emptyp2, test, fullset);
     pcommit = addoffsetinst(compst, ICommit);
     jumptohere(compst, pchoice);
     jumptohere(compst, test);
     codegen(compst, p2, opt, NOINST, fl);
     jumptohere(compst, pcommit);
+}
 
+static void coderecovery (CompileState *compst, TTree *p1, TTree *p2, int opt,
+                        const Charset *fl, const byte *cs) {
+  	int emptyp2 = (p2->tag == TTrue);
+		int pcommit;
+    int test = NOINST;
+		int precovery = addoffsetinst(compst, IRecov);
+		addcharset(compst, cs);
+    codegen(compst, p1, emptyp2, test, fullset);
+    pcommit = addoffsetinst(compst, ICommit);
+    jumptohere(compst, precovery);
+    jumptohere(compst, test);
+    codegen(compst, p2, opt, NOINST, fl);
+    jumptohere(compst, pcommit);
 }
 /* labeled failure end */
 
@@ -808,7 +813,7 @@ static void coderep (CompileState *compst, TTree *tree, int opt,
       /* L1: test (fail(p1)) -> L2; <p>; jmp L1; L2: */
       int jmp;
       int test = codetestset(compst, &st, 0);
-      codegen(compst, tree, opt, test, fullset);
+      codegen(compst, tree, 0, test, fullset);
       jmp = addoffsetinst(compst, IJmp);
       jumptohere(compst, test);
       jumptothere(compst, jmp, test);
@@ -961,11 +966,15 @@ static void codegen (CompileState *compst, TTree *tree, int opt, int tt,
       tree = sib2(tree); goto tailcall;
     }
     case TThrow: { /* labeled failure */
-			addthrowinstruction(compst, tree->labels);
+      addinstruction(compst, IThrow, (byte) tree->u.label);
 			break;
 		}
 		case TLabChoice: { /* labeled failure */
-			codelabchoice(compst, sib1(tree), sib2(tree), opt, fl, tree->labels); 
+			codelabchoice(compst, sib1(tree), sib2(tree), opt, fl, treelabelset(tree)); 
+			break;
+		}
+		case TRecov: { /* labeled failure */
+			coderecovery(compst, sib1(tree), sib2(tree), opt, fl, treelabelset(tree)); 
 			break;
 		}
     default: assert(0);
@@ -989,7 +998,8 @@ static void peephole (CompileState *compst) {
    redo:
     switch (code[i].i.code) {
       case IChoice: case ICall: case ICommit: case IPartialCommit:
-      case IBackCommit: case ITestChar: case ITestSet: case ILabChoice: /* labeled failure */
+      case IBackCommit: case ITestChar: case ITestSet:
+      case ILabChoice: case IRecov: /* labeled failure */
       case ITestAny: {  /* instructions with labels */
         jumptothere(compst, i, finallabel(code, i));  /* optimize label */
         break;
